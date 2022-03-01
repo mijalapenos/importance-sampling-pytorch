@@ -1,5 +1,7 @@
+import torch
+from tools.autograd_hacks import add_hooks, remove_hooks, compute_grad1
 
-def train_batch_importance(loader_with_indices, model, loss_fn, optimizer):
+def approximate_weights(loader_with_indices, model, loss_fn, optimizer, device):
     model.train()
     X, y = X.to(device), y.to(device)
 
@@ -11,7 +13,6 @@ def train_batch_importance(loader_with_indices, model, loss_fn, optimizer):
     model.lin2.bias.requires_grad = False
 
     # 2) register hooks to get per sample gradient for the last layer
-    from tools.autograd_hacks import add_hooks, compute_grad1
     add_hooks(model, model.lin3)
     pred = model(X)
 
@@ -25,12 +26,13 @@ def train_batch_importance(loader_with_indices, model, loss_fn, optimizer):
     # Compute per sample gradient
     compute_grad1(model, model.lin3)
 
-    optimizer.step()  # TODO: this should be turned on for the bigger batch
+    # TODO: how to calculate weights? sum?
 
+    remove_hooks(model)
     return None, None  # TODO: return scores
 
 
-def train(dataloader, model, loss_fn, optimizer):
+def train(dataloader, model, loss_fn, optimizer, device):
     size = len(dataloader.dataset)
     model.train()
     for batch, (X, y) in enumerate(dataloader):
@@ -50,7 +52,21 @@ def train(dataloader, model, loss_fn, optimizer):
             print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
 
 
-def test(dataloader, model, loss_fn):
+def train_batch(X, y, model, loss_fn, optimizer, device):
+    model.train()
+    X, y = X.to(device), y.to(device)
+    pred = model(X)
+
+    # Compute prediction error
+    loss = loss_fn(pred, y)
+
+    # Backpropagation
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+
+
+def test(dataloader, model, loss_fn, device):
     size = len(dataloader.dataset)
     num_batches = len(dataloader)
     model.eval()

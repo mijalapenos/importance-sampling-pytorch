@@ -7,7 +7,7 @@ from torchvision import datasets
 from torchvision.transforms import ToTensor
 
 
-from tools.importance_training import train, train_batch_importance, test
+from tools.importance_training import train, train_batch, approximate_weights, test
 from tools.dataset_wrapper import DatasetWithIndices
 
 
@@ -29,20 +29,6 @@ class NeuralNetwork(nn.Module):
         x = self.relu2(x)
         logits = self.lin3(x)
         return logits
-
-
-def train_batch(X, y, model, loss_fn, optimizer):
-    model.train()
-    X, y = X.to(device), y.to(device)
-    pred = model(X)
-
-    # Compute prediction error
-    loss = loss_fn(pred, y)
-
-    # Backpropagation
-    optimizer.zero_grad()
-    loss.backward()
-    optimizer.step()
 
 
 if __name__ == "__main__":
@@ -85,26 +71,32 @@ if __name__ == "__main__":
     loss_fn = nn.CrossEntropyLoss()
     optimizer = torch.optim.SGD(model.parameters(), lr=1e-3)
 
-    # Uniform sampling
+    ########################
+    ### Uniform sampling ###
+    ########################
     epochs = 5
     for t in range(epochs):
         print(f"Epoch {t + 1}\n-------------------------------")
-        train(train_dataloader, model, loss_fn, optimizer)
-        test(test_dataloader, model, loss_fn)
+        train(train_dataloader, model, loss_fn, optimizer, device)
+        test(test_dataloader, model, loss_fn, device)
     print("Done!")
 
-    # Importance sampling
+    ###########################
+    ### Importance sampling ###
+    ###########################
     from tools.conditions import RewrittenCondition
 
-    batch_size_B = 5*batch_size
+    batch_size_B = 5*batch_size  # TODO: how to select B according to the article?
     train_dataloader_B = DataLoader(DatasetWithIndices(training_data), batch_size=batch_size_B, shuffle=True)
 
     scores = None
     b = batch_size
     B = batch_size_B
     tau_th = float(B + 3 * b) / (3 * b)
-    momentum = 0.9  # TODO momentum should correspond with SGD
+    momentum = 0.9  # TODO: momentum should correspond with SGD I think
     condition = RewrittenCondition(tau_th, momentum)
+    trn_examples = len(training_data)
+    steps_in_epoch = trn_examples // batch_size
     epochs = 5
     for t in range(epochs):
         print(f"Epoch {t+1}\n-------------------------------")
@@ -116,7 +108,7 @@ if __name__ == "__main__":
                 if not condition.previously_satisfied():
                     print("Switching to importance sampling")
                 # 1a.1) get weights from forward pass of B samples
-                weights = train_batch_importance(train_dataloader_B, model, loss_fn, optimizer)  # TODO: with replacement or without?
+                weights = approximate_weights(train_dataloader_B, model, loss_fn, optimizer, device)  # TODO: with replacement or without?
                 # 1a.2) create WeightedsRandomSampler()
                 weighted_sampler = WeightedRandomSampler(weights, batch_size)
                 # 1a.3) sample small batch of b samples to train on
@@ -127,10 +119,10 @@ if __name__ == "__main__":
                 X, y =
                 pass
 
-            X, y = next(iter(train_dataloader))
+            X, y = next(iter(train_dataloader))  # TODO: this will always start from the beginning, create iterator separately and then call next
 
             # 2) train batch
-            loss, scores = train_batch(X, y, model, loss_fn, optimizer)
+            loss, scores = train_batch(X, y, model, loss_fn, optimizer, device)
 
             # 3) update sampler and sample updates condition
             condition.update(scores)  # TODO: I don't need the indices! DataLoader handles that automatically
@@ -140,5 +132,5 @@ if __name__ == "__main__":
                 loss, current = loss.item(), step * len(X)
                 print(f"loss: {loss:>7f}  [{current:>5d}/{steps_in_epoch:>5d}]")
 
-        test(test_dataloader, model, loss_fn)
+        test(test_dataloader, model, loss_fn, device)
     print("Done!")

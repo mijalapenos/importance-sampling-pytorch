@@ -57,7 +57,7 @@ def add_hooks(model: nn.Module, layer):
     model.__dict__.setdefault('autograd_hacks_hooks', []).extend(handles)
 
 
-def remove_hooks(model: nn.Module, layer):
+def remove_hooks(model: nn.Module):
     """
     Remove hooks added by add_hooks(model)
     """
