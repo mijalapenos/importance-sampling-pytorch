@@ -31,6 +31,77 @@ class NeuralNetwork(nn.Module):
         return logits
 
 
+def train_uniform(train_dataloader, test_dataloader):
+    model = NeuralNetwork().to(device)
+    momentum = 0.9
+    optimizer = torch.optim.SGD(model.parameters(), lr=1e-3, momentum=momentum)
+    loss_fn = nn.CrossEntropyLoss()
+
+    epochs = 5
+    for t in range(epochs):
+        print(f"Epoch {t + 1}\n-------------------------------")
+        train(train_dataloader, model, loss_fn, optimizer, device)
+        test(test_dataloader, model, loss_fn, device)
+    print("Done!")
+
+
+def train_importance(train_dataloader, test_dataloader):
+    from tools.conditions import RewrittenCondition
+    model = NeuralNetwork().to(device)
+    momentum = 0.9
+    optimizer = torch.optim.SGD(model.parameters(), lr=1e-3, momentum=momentum)
+    loss_fn = nn.CrossEntropyLoss()
+
+    batch_size_B = 5 * batch_size  # TODO: how to select B according to the article?
+    train_dataloader_B = DataLoader(DatasetWithIndices(training_data), batch_size=batch_size_B, shuffle=True)
+
+    scores = None
+    b = batch_size
+    B = batch_size_B
+    tau_th = float(B + 3 * b) / (3 * b)
+    condition = RewrittenCondition(tau_th, momentum)
+    trn_examples = len(training_data)
+    steps_in_epoch = trn_examples // batch_size
+    epochs = 5
+    for t in range(epochs):
+        print(f"Epoch {t + 1}\n-------------------------------")
+        train_dataloader_iter = iter(train_dataloader)
+        for step in range(steps_in_epoch):
+            # 1) sample batch
+            if condition.satisfied:
+                # 1a) sample batch based on importance
+                if not condition.previously_satisfied():
+                    pass
+                print("Switching to importance sampling\n")
+                # 1a.1) get weights from forward pass of B samples
+                weights = approximate_weights(train_dataloader_B, model, loss_fn, optimizer, device)  # TODO: with replacement or without?
+                # 1a.2) create WeightedsRandomSampler()
+                weighted_sampler = WeightedRandomSampler(weights, batch_size)
+                # 1a.3) sample small batch of b samples to train on
+                train_dataloader_weighted = DataLoader(training_data, sampler=weighted_sampler)
+                train_dataloader_iter = iter(train_dataloader_weighted)
+            else:
+                # 1b) sample batch uniformly
+                # print("nope")
+                pass
+
+            X, y = next(train_dataloader_iter)
+
+            # 2) train batch
+            loss, scores = train_batch(X, y, model, loss_fn, optimizer, device)  # TODO: what are scores?
+
+            # 3) update sampler and sample updates condition
+            condition.update(scores)
+
+            # print statistics
+            if step % 100 == 0:
+                loss, current = loss.item(), step * len(X)
+                print(f"loss: {loss:>7f}  [{current:>5d}/{steps_in_epoch:>5d}]")
+
+        test(test_dataloader, model, loss_fn, device)
+    print("Done!")
+
+
 if __name__ == "__main__":
     torch.manual_seed(0)
 
@@ -62,75 +133,9 @@ if __name__ == "__main__":
         break
 
     # Get cpu or gpu device for training
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     print(f"Using {device} device")
 
-    model = NeuralNetwork().to(device)
-    print(model)
+    # train_uniform(train_dataloader, test_dataloader)
 
-    loss_fn = nn.CrossEntropyLoss()
-    optimizer = torch.optim.SGD(model.parameters(), lr=1e-3)
-
-    ########################
-    ### Uniform sampling ###
-    ########################
-    epochs = 5
-    for t in range(epochs):
-        print(f"Epoch {t + 1}\n-------------------------------")
-        train(train_dataloader, model, loss_fn, optimizer, device)
-        test(test_dataloader, model, loss_fn, device)
-    print("Done!")
-
-    ###########################
-    ### Importance sampling ###
-    ###########################
-    from tools.conditions import RewrittenCondition
-
-    batch_size_B = 5*batch_size  # TODO: how to select B according to the article?
-    train_dataloader_B = DataLoader(DatasetWithIndices(training_data), batch_size=batch_size_B, shuffle=True)
-
-    scores = None
-    b = batch_size
-    B = batch_size_B
-    tau_th = float(B + 3 * b) / (3 * b)
-    momentum = 0.9  # TODO: momentum should correspond with SGD I think
-    condition = RewrittenCondition(tau_th, momentum)
-    trn_examples = len(training_data)
-    steps_in_epoch = trn_examples // batch_size
-    epochs = 5
-    for t in range(epochs):
-        print(f"Epoch {t+1}\n-------------------------------")
-        for step in range(steps_in_epoch):
-            # 1) sample batch
-            # TODO: create some sampling object, which will check condition and sample either uniform or informed
-
-            if condition.satisfied():
-                if not condition.previously_satisfied():
-                    print("Switching to importance sampling")
-                # 1a.1) get weights from forward pass of B samples
-                weights = approximate_weights(train_dataloader_B, model, loss_fn, optimizer, device)  # TODO: with replacement or without?
-                # 1a.2) create WeightedsRandomSampler()
-                weighted_sampler = WeightedRandomSampler(weights, batch_size)
-                # 1a.3) sample small batch of b samples to train on
-                train_dataloader = DataLoader(training_data, sampler=weighted_sampler)
-                X, y = weighted_sampler.sample()
-            else:
-                # 1b) sample batch uniformly
-                X, y =
-                pass
-
-            X, y = next(iter(train_dataloader))  # TODO: this will always start from the beginning, create iterator separately and then call next
-
-            # 2) train batch
-            loss, scores = train_batch(X, y, model, loss_fn, optimizer, device)
-
-            # 3) update sampler and sample updates condition
-            condition.update(scores)  # TODO: I don't need the indices! DataLoader handles that automatically
-
-            # print statistics
-            if step % 100 == 0:
-                loss, current = loss.item(), step * len(X)
-                print(f"loss: {loss:>7f}  [{current:>5d}/{steps_in_epoch:>5d}]")
-
-        test(test_dataloader, model, loss_fn, device)
-    print("Done!")
+    train_importance(train_dataloader, test_dataloader)

@@ -1,16 +1,20 @@
 import torch
-from tools.autograd_hacks import add_hooks, remove_hooks, compute_grad1
+from tools.autograd_hacks import add_hooks, remove_hooks, compute_grad1, clear_backprops
 
 def approximate_weights(loader_with_indices, model, loss_fn, optimizer, device):
     model.train()
+
+    indices, X, y = next(iter(loader_with_indices))
     X, y = X.to(device), y.to(device)
 
     # 1) freeze all layers with parameters except the last one
-    # we are interested only in the backprop w.r.t. the last parametrized layer, this will stop gradient from being computed further back
+    # we are interested only in the backprop w.r.t. the last parametrized layer,
+    # this will stop gradient from being computed further back and therefore speed up things
     model.lin1.weight.requires_grad = False
     model.lin1.bias.requires_grad = False
     model.lin2.weight.requires_grad = False
     model.lin2.bias.requires_grad = False
+    # TODO: would be nice to automatize the freezing of the layers
 
     # 2) register hooks to get per sample gradient for the last layer
     add_hooks(model, model.lin3)
@@ -29,12 +33,13 @@ def approximate_weights(loader_with_indices, model, loss_fn, optimizer, device):
     # TODO: how to calculate weights? sum?
 
     remove_hooks(model)
+    # TODO: align weights with indices
     return None, None  # TODO: return scores
 
 
 def train(dataloader, model, loss_fn, optimizer, device):
-    size = len(dataloader.dataset)
     model.train()
+    size = len(dataloader.dataset)
     for batch, (X, y) in enumerate(dataloader):
         X, y = X.to(device), y.to(device)
 
@@ -55,21 +60,31 @@ def train(dataloader, model, loss_fn, optimizer, device):
 def train_batch(X, y, model, loss_fn, optimizer, device):
     model.train()
     X, y = X.to(device), y.to(device)
-    pred = model(X)
 
-    # Compute prediction error
-    loss = loss_fn(pred, y)
+    # register hooks to get per sample gradient for the last layer
+    add_hooks(model, model.lin3)
 
-    # Backpropagation
+    pred = model(X)  # compute predictions
+    loss = loss_fn(pred, y)  # compute prediction error
     optimizer.zero_grad()
     loss.backward()
     optimizer.step()
+    compute_grad1(model, model.lin3)  # compute per sample gradient
+    remove_hooks(model)
+
+    per_sample_grad_weights = torch.abs(model.lin3.weight.grad1).sum(axis=2).sum(axis=1)
+    per_sample_grad_bias = torch.abs(model.lin3.bias.grad1).sum(axis=1)
+    scores = per_sample_grad_weights + per_sample_grad_bias
+
+    clear_backprops(model)
+
+    return loss, scores
 
 
 def test(dataloader, model, loss_fn, device):
+    model.eval()
     size = len(dataloader.dataset)
     num_batches = len(dataloader)
-    model.eval()
     test_loss, correct = 0, 0
     with torch.no_grad():
         for X, y in dataloader:

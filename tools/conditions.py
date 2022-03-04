@@ -1,3 +1,4 @@
+# https://github.com/idiap/importance-sampling/blob/master/importance_sampling/samplers.py
 import numpy as np
 
 

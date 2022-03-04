@@ -35,6 +35,13 @@ def _capture_backprops(layer: nn.Module, _input, output):
     layer.backprops_list.append(output[0].detach())
 
 
+def clear_backprops(model: nn.Module) -> None:
+    """Delete layer.backprops_list in every layer."""
+    for layer in model.modules():
+        if hasattr(layer, 'backprops_list'):
+            del layer.backprops_list
+
+
 def add_hooks(model: nn.Module, layer):
     """
     Adds hooks to model to save activations and backprop values.
@@ -62,7 +69,7 @@ def remove_hooks(model: nn.Module):
     Remove hooks added by add_hooks(model)
     """
 
-    assert model == 0, "not working, remove this after fix to https://github.com/pytorch/pytorch/issues/25723"
+    # assert model == 0, "not working, remove this after fix to https://github.com/pytorch/pytorch/issues/25723"  # TODO: ???
 
     if not hasattr(model, 'autograd_hacks_hooks'):
         print("Warning, asked to remove hooks, but no hooks found")
@@ -86,8 +93,7 @@ def compute_grad1(model: nn.Module, layer, loss_type: str = 'mean'):
 
     assert hasattr(layer, 'activations'), "No activations detected, run forward after add_hooks(model)"
     assert hasattr(layer, 'backprops_list'), "No backprops detected, run backward after add_hooks(model)"
-    assert len(
-        layer.backprops_list) == 1, "Multiple backprops detected, make sure to call clear_backprops(model)"
+    assert len(layer.backprops_list) == 1, "Multiple backprops detected, make sure to call clear_backprops(model)"
 
     A = layer.activations
     n = A.shape[0]
