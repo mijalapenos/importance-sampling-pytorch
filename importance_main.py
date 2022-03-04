@@ -63,16 +63,17 @@ def train_importance(train_dataloader, test_dataloader):
     condition = RewrittenCondition(tau_th, 0.6)
     trn_examples = len(training_data)
     steps_in_epoch = trn_examples // batch_size
-    epochs = 50
+    epochs = 25
     for t in range(epochs):
         print(f"Epoch {t + 1}\n-------------------------------")
         train_dataloader_iter = iter(train_dataloader)
         for step in range(steps_in_epoch):
             # 1) sample batch
+            if not condition.previously_satisfied and condition.satisfied:
+                print("Switching to importance sampling")
+
             if condition.satisfied:
                 # 1a) sample batch based on importance
-                if not condition.previously_satisfied:
-                    print("Switching to importance sampling\n")
                 # 1a.1) get weights from forward pass of B samples
                 weights = approximate_weights(train_dataloader_B, model, loss_fn, optimizer, device)  # TODO: with replacement or without?
                 # 1a.2) create WeightedsRandomSampler()
