@@ -29,12 +29,19 @@ def approximate_weights(loader_with_indices, model, loss_fn, optimizer, device):
 
     # Compute per sample gradient
     compute_grad1(model, model.lin3)
-
-    # TODO: how to calculate weights? sum?
-
     remove_hooks(model)
-    # TODO: align weights with indices
-    return None, None  # TODO: return scores
+
+    per_sample_grad_weights = torch.abs(model.lin3.weight.grad1).sum(axis=2).sum(axis=1)
+    per_sample_grad_bias = torch.abs(model.lin3.bias.grad1).sum(axis=1)
+    per_sample_grad = per_sample_grad_weights + per_sample_grad_bias
+
+    clear_backprops(model)
+
+    # align weights with indices, set other to zero
+    num_samples = len(loader_with_indices.dataset)
+    scores = torch.zeros(num_samples)
+    scores[indices] = per_sample_grad
+    return scores
 
 
 def train(dataloader, model, loss_fn, optimizer, device):

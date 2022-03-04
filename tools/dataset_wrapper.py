@@ -7,7 +7,7 @@ class DatasetWithIndices(Dataset):
 
     def __getitem__(self, index):
         data, target = self.dataset[index]
-        return data, target, index
+        return index, data, target
 
     def __len__(self):
         return len(self.dataset)

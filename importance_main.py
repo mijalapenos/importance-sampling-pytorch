@@ -48,21 +48,22 @@ def train_uniform(train_dataloader, test_dataloader):
 def train_importance(train_dataloader, test_dataloader):
     from tools.conditions import RewrittenCondition
     model = NeuralNetwork().to(device)
-    momentum = 0.9
-    optimizer = torch.optim.SGD(model.parameters(), lr=1e-3, momentum=momentum)
+    optimizer = torch.optim.SGD(model.parameters(), lr=1e-3, momentum=0.9)
     loss_fn = nn.CrossEntropyLoss()
 
-    batch_size_B = 5 * batch_size  # TODO: how to select B according to the article?
+    batch_size_B = 8 * batch_size  # TODO: how to select B according to the article?
     train_dataloader_B = DataLoader(DatasetWithIndices(training_data), batch_size=batch_size_B, shuffle=True)
 
     scores = None
     b = batch_size
     B = batch_size_B
-    tau_th = float(B + 3 * b) / (3 * b)
-    condition = RewrittenCondition(tau_th, momentum)
+    # tau_th = float(B + 3 * b) / (3 * b)
+    # tau_th = 1.5  # used in the paper, they say it should work as well
+    tau_th = 0.1
+    condition = RewrittenCondition(tau_th, 0.6)
     trn_examples = len(training_data)
     steps_in_epoch = trn_examples // batch_size
-    epochs = 5
+    epochs = 50
     for t in range(epochs):
         print(f"Epoch {t + 1}\n-------------------------------")
         train_dataloader_iter = iter(train_dataloader)
@@ -70,15 +71,14 @@ def train_importance(train_dataloader, test_dataloader):
             # 1) sample batch
             if condition.satisfied:
                 # 1a) sample batch based on importance
-                if not condition.previously_satisfied():
-                    pass
-                print("Switching to importance sampling\n")
+                if not condition.previously_satisfied:
+                    print("Switching to importance sampling\n")
                 # 1a.1) get weights from forward pass of B samples
                 weights = approximate_weights(train_dataloader_B, model, loss_fn, optimizer, device)  # TODO: with replacement or without?
                 # 1a.2) create WeightedsRandomSampler()
                 weighted_sampler = WeightedRandomSampler(weights, batch_size)
                 # 1a.3) sample small batch of b samples to train on
-                train_dataloader_weighted = DataLoader(training_data, sampler=weighted_sampler)
+                train_dataloader_weighted = DataLoader(training_data, batch_size=batch_size, sampler=weighted_sampler)
                 train_dataloader_iter = iter(train_dataloader_weighted)
             else:
                 # 1b) sample batch uniformly
@@ -121,7 +121,7 @@ if __name__ == "__main__":
         transform=ToTensor(),
     )
 
-    batch_size = 64
+    batch_size = 128
 
     # Create data loaders
     train_dataloader = DataLoader(training_data, batch_size=batch_size)

@@ -1,5 +1,7 @@
+# Importance sampling for PyTorch
 
-Attempt to implement https://github.com/idiap/importance-sampling for PyTorch.
+Attempt to implement a demo of https://github.com/idiap/importance-sampling for PyTorch.
+Work in progress.
 
 Article: https://arxiv.org/abs/1803.00942 
 
