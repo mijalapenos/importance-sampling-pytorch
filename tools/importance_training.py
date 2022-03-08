@@ -1,5 +1,7 @@
 import torch
 from tools.autograd_hacks import add_hooks, remove_hooks, compute_grad1, clear_backprops
+from tqdm import tqdm
+
 
 def approximate_weights(loader_with_indices, model, loss_fn, optimizer, device):
     model.train()
@@ -46,8 +48,7 @@ def approximate_weights(loader_with_indices, model, loss_fn, optimizer, device):
 
 def train(dataloader, model, loss_fn, optimizer, device):
     model.train()
-    size = len(dataloader.dataset)
-    for batch, (X, y) in enumerate(dataloader):
+    for batch, (X, y) in tqdm(enumerate(dataloader), total=len(dataloader)):
         X, y = X.to(device), y.to(device)
 
         # Compute prediction error
@@ -59,9 +60,9 @@ def train(dataloader, model, loss_fn, optimizer, device):
         loss.backward()
         optimizer.step()
 
-        if batch % 100 == 0:
-            loss, current = loss.item(), batch * len(X)
-            print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
+        # if batch % 100 == 0:
+        #     loss, current = loss.item(), batch * len(X)
+        #     print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
 
 
 def train_batch(X, y, model, loss_fn, optimizer, device):
@@ -94,11 +95,12 @@ def test(dataloader, model, loss_fn, device):
     num_batches = len(dataloader)
     test_loss, correct = 0, 0
     with torch.no_grad():
-        for X, y in dataloader:
+        for X, y in tqdm(dataloader):
             X, y = X.to(device), y.to(device)
             pred = model(X)
             test_loss += loss_fn(pred, y).item()
             correct += (pred.argmax(1) == y).type(torch.float).sum().item()
     test_loss /= num_batches
-    correct /= size
-    print(f"Test Error: \n Accuracy: {(100*correct):>0.1f}%, Avg loss: {test_loss:>8f} \n")
+    acc = 100 * correct / size
+    print(f"Test Error: \n Accuracy: {acc:.1f}%, Avg loss: {test_loss:>8f} \n")
+    return acc, test_loss

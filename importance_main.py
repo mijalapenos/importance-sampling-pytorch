@@ -2,13 +2,22 @@
 
 import torch
 from torch import nn
-from torch.utils.data import DataLoader, WeightedRandomSampler
+from torch.utils.data import DataLoader, WeightedRandomSampler, BatchSampler
 from torchvision import datasets
 from torchvision.transforms import ToTensor
+from tqdm import tqdm
 
+from torch.utils.tensorboard import SummaryWriter
 
 from tools.importance_training import train, train_batch, approximate_weights, test
 from tools.dataset_wrapper import DatasetWithIndices
+
+
+def write_stats(writer, epoch_idx, val_acc, val_loss, importance_sampling=0):
+    if writer is not None:
+        writer.add_scalar("Accuracy/val", val_acc, epoch_idx)
+        writer.add_scalar("Loss/val", val_loss, epoch_idx)
+        writer.add_scalar("Importance_sampling", importance_sampling, epoch_idx)
 
 
 class NeuralNetwork(nn.Module):
@@ -31,26 +40,32 @@ class NeuralNetwork(nn.Module):
         return logits
 
 
-def train_uniform(train_dataloader, test_dataloader):
+def train_uniform(train_dataloader, test_dataloader, lr):
+    print("Training with uniform sampling")
     model = NeuralNetwork().to(device)
-    momentum = 0.9
-    optimizer = torch.optim.SGD(model.parameters(), lr=1e-3, momentum=momentum)
+    optimizer = torch.optim.SGD(model.parameters(), lr=lr, momentum=0.9)
     loss_fn = nn.CrossEntropyLoss()
 
-    epochs = 5
+    writer = SummaryWriter(comment=f"Uniform_lr={lr}")
+
+    epochs = 30
     for t in range(epochs):
         print(f"Epoch {t + 1}\n-------------------------------")
         train(train_dataloader, model, loss_fn, optimizer, device)
-        test(test_dataloader, model, loss_fn, device)
-    print("Done!")
+        acc, loss = test(test_dataloader, model, loss_fn, device)
+        write_stats(writer, t, acc, loss)
+    print("Done!\n")
 
 
-def train_importance(train_dataloader, test_dataloader):
-    from tools.conditions import RewrittenCondition
+def train_importance(train_dataloader, test_dataloader, lr, tau_th):
+    print("Training with importance sampling")
     model = NeuralNetwork().to(device)
-    optimizer = torch.optim.SGD(model.parameters(), lr=1e-3, momentum=0.9)
+    optimizer = torch.optim.SGD(model.parameters(), lr=lr, momentum=0.9)
     loss_fn = nn.CrossEntropyLoss()
 
+    writer = SummaryWriter(comment=f"Importance_lr={lr}_tau_th={tau_th:.1f}")
+
+    from tools.conditions import RewrittenCondition
     batch_size_B = 8 * batch_size  # TODO: how to select B according to the article?
     train_dataloader_B = DataLoader(DatasetWithIndices(training_data), batch_size=batch_size_B, shuffle=True)
 
@@ -59,47 +74,46 @@ def train_importance(train_dataloader, test_dataloader):
     B = batch_size_B
     # tau_th = float(B + 3 * b) / (3 * b)
     # tau_th = 1.5  # used in the paper, they say it should work as well
-    tau_th = 0.1
-    condition = RewrittenCondition(tau_th, 0.6)
+    condition = RewrittenCondition(tau_th, 0.9)
     trn_examples = len(training_data)
     steps_in_epoch = trn_examples // batch_size
-    epochs = 25
+    epochs = 30
     for t in range(epochs):
         print(f"Epoch {t + 1}\n-------------------------------")
         train_dataloader_iter = iter(train_dataloader)
-        for step in range(steps_in_epoch):
+        importance_sampling = 0
+        for step in tqdm(range(steps_in_epoch)):
             # 1) sample batch
-            if not condition.previously_satisfied and condition.satisfied:
-                print("Switching to importance sampling")
-
             if condition.satisfied:
+                print("\n > Ran importance sampling")
                 # 1a) sample batch based on importance
                 # 1a.1) get weights from forward pass of B samples
                 weights = approximate_weights(train_dataloader_B, model, loss_fn, optimizer, device)  # TODO: with replacement or without?
                 # 1a.2) create WeightedsRandomSampler()
-                weighted_sampler = WeightedRandomSampler(weights, batch_size)
+                weighted_sampler = WeightedRandomSampler(weights, batch_size_B)
+                # weighted_batch_sampler = BatchSampler(weighted_sampler, batch_size, False)
                 # 1a.3) sample small batch of b samples to train on
                 train_dataloader_weighted = DataLoader(training_data, batch_size=batch_size, sampler=weighted_sampler)
-                train_dataloader_iter = iter(train_dataloader_weighted)
+                X, y = next(iter(train_dataloader_weighted))
+                importance_sampling = 1
             else:
                 # 1b) sample batch uniformly
                 # print("nope")
-                pass
-
-            X, y = next(train_dataloader_iter)
+                X, y = next(train_dataloader_iter)
 
             # 2) train batch
-            loss, scores = train_batch(X, y, model, loss_fn, optimizer, device)  # TODO: what are scores?
+            loss, scores = train_batch(X, y, model, loss_fn, optimizer, device)
 
             # 3) update sampler and sample updates condition
             condition.update(scores)
 
             # print statistics
-            if step % 100 == 0:
-                loss, current = loss.item(), step * len(X)
-                print(f"loss: {loss:>7f}  [{current:>5d}/{steps_in_epoch:>5d}]")
+            # if step % 100 == 0:
+            #     loss, current = loss.item(), step * len(X)
+            #     print(f"loss: {loss:>7f}  [{current:>5d}/{steps_in_epoch:>5d}]")
 
-        test(test_dataloader, model, loss_fn, device)
+        acc, loss = test(test_dataloader, model, loss_fn, device)
+        write_stats(writer, t, acc, loss, importance_sampling)
     print("Done!")
 
 
@@ -137,6 +151,10 @@ if __name__ == "__main__":
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     print(f"Using {device} device")
 
-    # train_uniform(train_dataloader, test_dataloader)
+    lr = 0.01
+    train_uniform(train_dataloader, test_dataloader, lr)
 
-    train_importance(train_dataloader, test_dataloader)
+    tau_th = 1.5
+    while tau_th < 2:
+        train_importance(train_dataloader, test_dataloader, lr, tau_th)
+        tau_th += 0.1
