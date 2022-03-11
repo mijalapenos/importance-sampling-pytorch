@@ -3,6 +3,13 @@ from tools.autograd_hacks import add_hooks, remove_hooks, compute_grad1, clear_b
 from tqdm import tqdm
 
 
+def write_stats(writer, epoch_idx, train_loss, val_acc, val_loss, importance_sampling=0):
+    writer.add_scalar("Train/loss", train_loss, epoch_idx)
+    writer.add_scalar("Train/importance", importance_sampling, epoch_idx)
+    writer.add_scalar("Validation/accuracy", val_acc, epoch_idx)
+    writer.add_scalar("Validation/loss", val_loss, epoch_idx)
+
+
 def approximate_weights(loader_with_indices, model, loss_fn, optimizer, device):
     model.train()
 
@@ -39,6 +46,11 @@ def approximate_weights(loader_with_indices, model, loss_fn, optimizer, device):
 
     clear_backprops(model)
 
+    model.lin1.weight.requires_grad = True
+    model.lin1.bias.requires_grad = True
+    model.lin2.weight.requires_grad = True
+    model.lin2.bias.requires_grad = True
+
     # align weights with indices, set other to zero
     num_samples = len(loader_with_indices.dataset)
     scores = torch.zeros(num_samples)
@@ -48,6 +60,7 @@ def approximate_weights(loader_with_indices, model, loss_fn, optimizer, device):
 
 def train(dataloader, model, loss_fn, optimizer, device):
     model.train()
+    total_loss = 0
     for batch, (X, y) in tqdm(enumerate(dataloader), total=len(dataloader)):
         X, y = X.to(device), y.to(device)
 
@@ -60,9 +73,13 @@ def train(dataloader, model, loss_fn, optimizer, device):
         loss.backward()
         optimizer.step()
 
+        total_loss += loss.item()
+
         # if batch % 100 == 0:
         #     loss, current = loss.item(), batch * len(X)
         #     print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
+
+    return total_loss / len(dataloader)
 
 
 def train_batch(X, y, model, loss_fn, optimizer, device):
@@ -102,5 +119,4 @@ def test(dataloader, model, loss_fn, device):
             correct += (pred.argmax(1) == y).type(torch.float).sum().item()
     test_loss /= num_batches
     acc = 100 * correct / size
-    print(f"Test Error: \n Accuracy: {acc:.1f}%, Avg loss: {test_loss:>8f} \n")
     return acc, test_loss
