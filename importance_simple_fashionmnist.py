@@ -9,11 +9,11 @@ from tqdm import tqdm
 
 from torch.utils.tensorboard import SummaryWriter
 
-from tools.importance_training import train, train_batch, approximate_weights, test, write_stats
+from tools.importance_training import ImportanceSamplingModule, train, train_batch, approximate_weights, test, write_stats
 from tools.dataset_wrapper import DatasetWithIndices
 
 
-class NeuralNetwork(nn.Module):
+class NeuralNetwork(ImportanceSamplingModule):
     def __init__(self):
         super(NeuralNetwork, self).__init__()
         self.flatten = nn.Flatten()
@@ -31,6 +31,29 @@ class NeuralNetwork(nn.Module):
         x = self.relu2(x)
         logits = self.lin3(x)
         return logits
+
+    def freeze_all_but_last_trainable_layer(self):
+        self.lin1.weight.requires_grad = False
+        self.lin1.bias.requires_grad = False
+        self.lin2.weight.requires_grad = False
+        self.lin2.bias.requires_grad = False
+
+    def defreeze_all_trainable_layers(self):
+        self.lin1.weight.requires_grad = True
+        self.lin1.bias.requires_grad = True
+        self.lin2.weight.requires_grad = True
+        self.lin2.bias.requires_grad = True
+
+    def get_last_trainable_layer(self):
+        # should be a conv or a linear layer
+        return self.lin3
+
+    def get_per_sample_grad(self):
+        # assumes compute_grad1() was called beforehand
+        per_sample_grad_weights = torch.abs(self.lin3.weight.grad1).sum((2, 1))
+        per_sample_grad_bias = torch.abs(self.lin3.bias.grad1).sum(1)
+        per_sample_grad = per_sample_grad_weights + per_sample_grad_bias
+        return per_sample_grad
 
 
 def train_uniform(model, train_dataloader, test_dataloader, epochs, optim, sched=None):
@@ -156,7 +179,7 @@ if __name__ == "__main__":
     model = NeuralNetwork().to(device)
     optim = torch.optim.SGD(model.parameters(), lr=lr, momentum=0.9)
     sched = torch.optim.lr_scheduler.MultiStepLR(optim, milestones=[5, 15], gamma=0.2)
-    train_uniform(model, train_dataloader, test_dataloader, epochs, optim, sched)
+    # train_uniform(model, train_dataloader, test_dataloader, epochs, optim, sched)
 
     tau_th = 1.5
     while tau_th <= 2:

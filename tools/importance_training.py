@@ -1,6 +1,29 @@
 import torch
 from tools.autograd_hacks import add_hooks, remove_hooks, compute_grad1, clear_backprops
 from tqdm import tqdm
+from torch import nn
+
+
+class ImportanceSamplingModule(nn.Module):
+    def __init__(self):
+        super(ImportanceSamplingModule, self).__init__()
+
+    def freeze_all_but_last_trainable_layer(self):
+        """Sets all trainable layers except the last one to layer_params.requires_grad = False"""
+        raise NotImplementedError
+
+    def defreeze_all_trainable_layers(self):
+        """Sets all trainable layers to layer_params.requires_grad = True"""
+        raise NotImplementedError
+
+    def get_last_trainable_layer(self):
+        """Returns last trainable layer, should be conv or linear"""
+        raise NotImplementedError
+
+    def get_per_sample_grad(self):
+        """Computes per sample gradient from grad1 parameter of the last trainable layer.
+        Assumes compute_grad1() was called beforehand"""
+        raise NotImplementedError
 
 
 def write_stats(writer, epoch_idx, train_loss, val_acc, val_loss, importance_sampling=0):
@@ -19,14 +42,11 @@ def approximate_weights(loader_with_indices, model, loss_fn, optimizer, device):
     # 1) freeze all layers with parameters except the last one
     # we are interested only in the backprop w.r.t. the last parametrized layer,
     # this will stop gradient from being computed further back and therefore speed up things
-    model.lin1.weight.requires_grad = False
-    model.lin1.bias.requires_grad = False
-    model.lin2.weight.requires_grad = False
-    model.lin2.bias.requires_grad = False
+    model.freeze_all_but_last_trainable_layer()
     # TODO: would be nice to automatize the freezing of the layers
 
     # 2) register hooks to get per sample gradient for the last layer
-    add_hooks(model, model.lin3)
+    add_hooks(model, model.get_last_trainable_layer())
     pred = model(X)
 
     # Compute prediction error
@@ -37,19 +57,15 @@ def approximate_weights(loader_with_indices, model, loss_fn, optimizer, device):
     loss.backward()
 
     # Compute per sample gradient
-    compute_grad1(model, model.lin3)
+    compute_grad1(model, model.get_last_trainable_layer())
     remove_hooks(model)
 
-    per_sample_grad_weights = torch.abs(model.lin3.weight.grad1).sum(axis=2).sum(axis=1)
-    per_sample_grad_bias = torch.abs(model.lin3.bias.grad1).sum(axis=1)
-    per_sample_grad = per_sample_grad_weights + per_sample_grad_bias
+    per_sample_grad = model.get_per_sample_grad()
 
     clear_backprops(model)
 
-    model.lin1.weight.requires_grad = True
-    model.lin1.bias.requires_grad = True
-    model.lin2.weight.requires_grad = True
-    model.lin2.bias.requires_grad = True
+    # defreeze trainable layers
+    model.defreeze_all_trainable_layers()
 
     # align weights with indices, set other to zero
     num_samples = len(loader_with_indices.dataset)
@@ -87,14 +103,14 @@ def train_batch(X, y, model, loss_fn, optimizer, device):
     X, y = X.to(device), y.to(device)
 
     # register hooks to get per sample gradient for the last layer
-    add_hooks(model, model.lin3)
+    add_hooks(model, model.get_last_trainable_layer())
 
     pred = model(X)  # compute predictions
     loss = loss_fn(pred, y)  # compute prediction error
     optimizer.zero_grad()
     loss.backward()
     optimizer.step()
-    compute_grad1(model, model.lin3)  # compute per sample gradient
+    compute_grad1(model, model.get_last_trainable_layer())  # compute per sample gradient
     remove_hooks(model)
 
     per_sample_grad_weights = torch.abs(model.lin3.weight.grad1).sum(axis=2).sum(axis=1)
