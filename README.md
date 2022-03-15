@@ -1,9 +1,10 @@
 # Importance sampling for PyTorch
 
-Attempt to implement a demo of https://github.com/idiap/importance-sampling for PyTorch.
-Work in progress.
+Working demo of importance sampling proposed by [Katharopoulos, Fleuret](https://arxiv.org/abs/1803.00942) for PyTorch.
 
-Article: https://arxiv.org/abs/1803.00942 
+Article: https://arxiv.org/abs/1803.00942
+
+Original source code: https://github.com/idiap/importance-sampling
 
 Other sources:
 * https://discuss.pytorch.org/t/computing-per-sample-gradient-w-r-t-last-layers-parameters/143646 (discussion thread created during the development)
