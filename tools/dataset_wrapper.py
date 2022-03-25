@@ -1,6 +1,8 @@
 from torch.utils.data import Dataset, DataLoader
 
+
 class DatasetWithIndices(Dataset):
+    """Wraps another Dataset object to return index of the sample in addition to data and target"""
     # https://discuss.pytorch.org/t/how-to-retrieve-the-sample-indices-of-a-mini-batch/7948/12
     def __init__(self, dataset):
         self.dataset = dataset

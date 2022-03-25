@@ -2,6 +2,10 @@ import torch
 from tools.autograd_hacks import add_hooks, remove_hooks, compute_grad1, clear_backprops
 from tqdm import tqdm
 from torch import nn
+from tools.dataset_wrapper import DatasetWithIndices
+from tqdm import tqdm
+from torch.utils.tensorboard import SummaryWriter
+from torch.utils.data import DataLoader, WeightedRandomSampler, BatchSampler
 
 
 class ImportanceSamplingModule(nn.Module):
@@ -43,7 +47,6 @@ def approximate_weights(loader_with_indices, model, loss_fn, optimizer, device):
     # we are interested only in the backprop w.r.t. the last parametrized layer,
     # this will stop gradient from being computed further back and therefore speed up things
     model.freeze_all_but_last_trainable_layer()
-    # TODO: would be nice to automatize the freezing of the layers
 
     # 2) register hooks to get per sample gradient for the last layer
     add_hooks(model, model.get_last_trainable_layer())
@@ -107,15 +110,15 @@ def train_batch(X, y, model, loss_fn, optimizer, device):
 
     pred = model(X)  # compute predictions
     loss = loss_fn(pred, y)  # compute prediction error
+
     optimizer.zero_grad()
     loss.backward()
     optimizer.step()
+
     compute_grad1(model, model.get_last_trainable_layer())  # compute per sample gradient
     remove_hooks(model)
 
-    per_sample_grad_weights = torch.abs(model.lin3.weight.grad1).sum(axis=2).sum(axis=1)
-    per_sample_grad_bias = torch.abs(model.lin3.bias.grad1).sum(axis=1)
-    scores = per_sample_grad_weights + per_sample_grad_bias
+    scores = model.get_per_sample_grad()
 
     clear_backprops(model)
 
@@ -136,3 +139,96 @@ def test(dataloader, model, loss_fn, device):
     test_loss /= num_batches
     acc = 100 * correct / size
     return acc, test_loss
+
+
+def train_uniform(model, train_dataloader, test_dataloader, epochs, optim, sched=None, device='cpu'):
+    print("Training with uniform sampling")
+    loss_fn = nn.CrossEntropyLoss()
+
+    initial_lr = optim.param_groups[0]['lr']
+    writer = SummaryWriter(comment=f"_Uniform_Sched_lr={initial_lr}")
+
+    for t in range(epochs):
+        print(f"Epoch {t + 1}\n-------------------------------")
+        trn_loss = train(train_dataloader, model, loss_fn, optim, device)
+        acc, val_loss = test(test_dataloader, model, loss_fn, device)
+        if sched is not None:
+            sched.step()
+        print(f"Validation accuracy: {acc:.1f}%, avg loss: {val_loss:>8f}\n")
+        write_stats(writer, t, trn_loss, acc, val_loss)
+    print("Done!\n")
+
+
+def train_importance(model, train_data, test_data, batch_size, epochs, optim, sched=None,
+                     tau_th=1.5, large_bs=None, device='cpu'):
+    """
+    Hyperparameters are tau_th (threshold) and large batch size
+    """
+    print("Training with importance sampling")
+    loss_fn = nn.CrossEntropyLoss()
+
+    train_dataloader = DataLoader(train_data, batch_size=batch_size)
+    test_dataloader = DataLoader(test_data, batch_size=batch_size)
+
+    initial_lr = optim.param_groups[0]['lr']
+    writer = SummaryWriter(comment=f"_Importance_Sched_lr={initial_lr}_tauth={tau_th:.1f}")
+
+    from tools.conditions import RewrittenCondition
+    if large_bs is None:
+        large_bs = 8 * batch_size
+    train_dataloader_B = DataLoader(DatasetWithIndices(train_data), batch_size=large_bs, shuffle=True)
+
+    scores = None
+    b = batch_size
+    B = large_bs
+    # tau_th = float(B + 3 * b) / (3 * b)
+    # tau_th = 1.5  # used in the paper, they say it should work as well
+    condition = RewrittenCondition(tau_th, 0.9)
+    trn_examples = len(train_data)
+    steps_in_epoch = trn_examples // batch_size
+    for t in range(epochs):
+        print(f"Epoch {t + 1}\n-------------------------------")
+        train_dataloader_iter = iter(train_dataloader)
+        importance_sampling = 0
+        total_trn_loss = 0
+        for _ in tqdm(range(steps_in_epoch)):
+            # 1) sample batch
+            if condition.satisfied:
+                importance_sampling += 1
+                # 1a) sample batch based on importance
+                # 1a.1) get weights from forward pass of B samples
+                weights = approximate_weights(train_dataloader_B, model, loss_fn, optim, device)
+                # 1a.2) create WeightedRandomSampler()
+                weighted_sampler = WeightedRandomSampler(weights, large_bs)
+                # weighted_batch_sampler = BatchSampler(weighted_sampler, batch_size, False)
+                # 1a.3) sample small batch of b samples to train on
+                train_dataloader_weighted = DataLoader(train_data, batch_size=batch_size, sampler=weighted_sampler)
+                X, y = next(iter(train_dataloader_weighted))
+            else:
+                # 1b) sample batch uniformly
+                # print("nope")
+                X, y = next(train_dataloader_iter)
+
+            # 2) train batch
+            loss, scores = train_batch(X, y, model, loss_fn, optim, device)
+            total_trn_loss += loss.item()
+
+            # 3) update sampler and sample updates condition
+            condition.update(scores)
+
+            # print statistics
+            # if step % 100 == 0:
+            #     loss, current = loss.item(), step * len(X)
+            #     print(f"loss: {loss:>7f}  [{current:>5d}/{steps_in_epoch:>5d}]")
+
+        if sched is not None:
+            sched.step()
+
+        trn_loss = total_trn_loss / steps_in_epoch
+        acc, loss = test(test_dataloader, model, loss_fn, device)
+        print(f"Validation accuracy: {acc:.1f}%, avg loss: {loss:>8f}")
+        if importance_sampling:
+            print(f" > Ran importance sampling {importance_sampling} times")
+        print()
+        write_stats(writer, t, trn_loss, acc, loss, importance_sampling)
+    print("Done!")
