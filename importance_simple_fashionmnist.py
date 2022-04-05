@@ -34,7 +34,7 @@ class NeuralNetwork(ImportanceSamplingModule):
         self.lin2.weight.requires_grad = False
         self.lin2.bias.requires_grad = False
 
-    def defreeze_all_trainable_layers(self):
+    def unfreeze_all_trainable_layers(self):
         self.lin1.weight.requires_grad = True
         self.lin1.bias.requires_grad = True
         self.lin2.weight.requires_grad = True
@@ -92,7 +92,7 @@ if __name__ == "__main__":
     model = NeuralNetwork().to(device)
     optim = torch.optim.SGD(model.parameters(), lr=lr, momentum=0.9)
     sched = torch.optim.lr_scheduler.MultiStepLR(optim, milestones=[5, 15], gamma=0.2)
-    train_uniform(model, train_dataloader, test_dataloader, epochs, optim, sched, device)
+    # train_uniform(model, train_dataloader, test_dataloader, epochs, optim, sched, device)
 
     tau_th = 1.5
     while tau_th <= 2:

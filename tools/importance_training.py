@@ -1,11 +1,12 @@
 import torch
 from tools.autograd_hacks import add_hooks, remove_hooks, compute_grad1, clear_backprops
-from tqdm import tqdm
 from torch import nn
 from tools.dataset_wrapper import DatasetWithIndices
 from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
-from torch.utils.data import DataLoader, WeightedRandomSampler, BatchSampler
+from torch.utils.data import DataLoader, WeightedRandomSampler
+
+from tools.conditions import RewrittenCondition
 
 
 class ImportanceSamplingModule(nn.Module):
@@ -16,7 +17,7 @@ class ImportanceSamplingModule(nn.Module):
         """Sets all trainable layers except the last one to layer_params.requires_grad = False"""
         raise NotImplementedError
 
-    def defreeze_all_trainable_layers(self):
+    def unfreeze_all_trainable_layers(self):
         """Sets all trainable layers to layer_params.requires_grad = True"""
         raise NotImplementedError
 
@@ -37,7 +38,7 @@ def write_stats(writer, epoch_idx, train_loss, val_acc, val_loss, importance_sam
     writer.add_scalar("Validation/loss", val_loss, epoch_idx)
 
 
-def approximate_weights(loader_with_indices, model, loss_fn, optimizer, device):
+def approximate_weights(model, loader_with_indices, loss_fn, optimizer, device):
     model.train()
 
     indices, X, y = next(iter(loader_with_indices))
@@ -67,8 +68,8 @@ def approximate_weights(loader_with_indices, model, loss_fn, optimizer, device):
 
     clear_backprops(model)
 
-    # defreeze trainable layers
-    model.defreeze_all_trainable_layers()
+    # unfreeze trainable layers
+    model.unfreeze_all_trainable_layers()
 
     # align weights with indices, set other to zero
     num_samples = len(loader_with_indices.dataset)
@@ -160,7 +161,7 @@ def train_uniform(model, train_dataloader, test_dataloader, epochs, optim, sched
 
 
 def train_importance(model, train_data, test_data, batch_size, epochs, optim, sched=None,
-                     tau_th=1.5, large_bs=None, device='cpu'):
+                     tau_th=None, large_bs=None, device='cpu'):
     """
     Hyperparameters are tau_th (threshold) and large batch size
     """
@@ -173,16 +174,13 @@ def train_importance(model, train_data, test_data, batch_size, epochs, optim, sc
     initial_lr = optim.param_groups[0]['lr']
     writer = SummaryWriter(comment=f"_Importance_Sched_lr={initial_lr}_tauth={tau_th:.1f}")
 
-    from tools.conditions import RewrittenCondition
-    if large_bs is None:
-        large_bs = 8 * batch_size
+    large_bs = 8 * batch_size if large_bs is None else large_bs
     train_dataloader_B = DataLoader(DatasetWithIndices(train_data), batch_size=large_bs, shuffle=True)
 
     scores = None
     b = batch_size
     B = large_bs
-    # tau_th = float(B + 3 * b) / (3 * b)
-    # tau_th = 1.5  # used in the paper, they say it should work as well
+    tau_th = float(B + 3 * b) / (3 * b) if tau_th is None else tau_th
     condition = RewrittenCondition(tau_th, 0.9)
     trn_examples = len(train_data)
     steps_in_epoch = trn_examples // batch_size
@@ -197,7 +195,7 @@ def train_importance(model, train_data, test_data, batch_size, epochs, optim, sc
                 importance_sampling += 1
                 # 1a) sample batch based on importance
                 # 1a.1) get weights from forward pass of B samples
-                weights = approximate_weights(train_dataloader_B, model, loss_fn, optim, device)
+                weights = approximate_weights(model, train_dataloader_B, loss_fn, optim, device)
                 # 1a.2) create WeightedRandomSampler()
                 weighted_sampler = WeightedRandomSampler(weights, large_bs)
                 # weighted_batch_sampler = BatchSampler(weighted_sampler, batch_size, False)
