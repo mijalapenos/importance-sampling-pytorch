@@ -143,8 +143,9 @@ class VarianceReductionCondition(Condition):
         return self._previous_vr > self._vr_th
 
     def update(self, scores):
-        u = 1.0/len(scores)
-        S = scores.sum().cpu()
+        scores = scores.cpu()
+        u = 1.0 / len(scores)
+        S = scores.sum()
         if S == 0:
             g = np.array(u)
         else:
@@ -189,8 +190,9 @@ class RewrittenCondition(Condition):
         return self._previous_vr > self._vr_th
 
     def update(self, scores):
+        scores = scores.cpu()
         u = 1.0 / len(scores)
-        S = scores.sum().cpu()
+        S = scores.sum()
         if S == 0:
             g = np.array(u)  # no scores means uniform
         else:

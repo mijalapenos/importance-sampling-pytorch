@@ -74,7 +74,7 @@ def approximate_weights(model, loader_with_indices, loss_fn, optimizer, device):
     # align weights with indices, set other to zero
     num_samples = len(loader_with_indices.dataset)
     scores = torch.zeros(num_samples)
-    scores[indices] = per_sample_grad
+    scores[indices] = per_sample_grad.cpu()
     return scores
 
 
